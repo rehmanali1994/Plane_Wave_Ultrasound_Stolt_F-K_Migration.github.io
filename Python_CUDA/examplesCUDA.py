@@ -21,6 +21,7 @@ RF2 = RFdata2['RF2']; param2 = RFdata2['param2'][0];
 RF1 = np.double(RF1); RF1 = RF1 - np.mean(RF1);
 RF2 = np.double(RF2); RF2 = RF2 - np.mean(RF2);
 
+"""
 #-- Example #1: Nylon fibers 
 migRF1 = np.zeros(RF1[:,:,0].shape, dtype = 'complex128');
 for idx in np.arange(7):
@@ -37,6 +38,7 @@ plt.yticks(0.01*np.arange(11));
 plt.gca().invert_yaxis()
 plt.xlabel('Azimuth (m)'); plt.ylabel('Depth (m)');
 plt.show();
+"""
 
 #-- Example #2: Circular Targets
 migRF2 = np.zeros(RF2[:,:,0].shape, dtype = 'complex128');

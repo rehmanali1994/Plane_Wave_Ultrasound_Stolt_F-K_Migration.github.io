@@ -10,6 +10,7 @@ import numpy as np
 import scipy.io as sio
 from scipy.signal import hilbert
 import matplotlib.pyplot as plt
+import pdb
 
 #-- Load the RF data
 # The RF data have been converted to 8 bits due to size limit (up to 1.5
@@ -40,6 +41,7 @@ plt.show();
 
 #-- Example #2: Circular Targets
 migRF2 = np.zeros(RF2[:,:,0].shape, dtype = 'complex128');
+pdb.set_trace();
 for idx in np.arange(7):
     x2, z2, migRF_idx = fkmig(RF2[:,:,idx], np.double(param2['fs']), \
         np.double(param2['pitch']), TXangle = np.double(param2['TXangle'][0][:,idx]), \

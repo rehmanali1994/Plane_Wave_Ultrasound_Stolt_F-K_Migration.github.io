@@ -7,7 +7,7 @@ Created on Tue Sep  6 10:57:23 2016
 
 import numpy as np
 from sys import platform
-import os
+import os, pdb
 
 def fkmig(SIG, fs, pitch, TXangle = 0, c = 1540, t0 = 0):
     """ fkmig   f-k migration for plane wave imaging
@@ -42,11 +42,13 @@ def fkmig(SIG, fs, pitch, TXangle = 0, c = 1540, t0 = 0):
     IMPORTANT NOTE: fkmig does not use the transmit time delays as input
     parameters. The transmit delays are determimed from the specified speed
     of sound (c) and the steering angle (TXangle). 
-    
+    https://github.com/rehmanali1994/Plane_Wave_Ultrasound_Stolt_F-K_Migration.github.io.git
     Reference
     --------- 
     Garcia et al., Stolt's f-k migration for plane wave ultrasound imaging.
     IEEE Trans Ultrason Ferroelectr Freq Control, 2013;60:1853-1867. """
+
+    pdb.set_trace();
 
     # Get the dimensions of the data
     nt, nx = SIG.shape;  
@@ -55,7 +57,7 @@ def fkmig(SIG, fs, pitch, TXangle = 0, c = 1540, t0 = 0):
     np.savetxt("SIG.txt", SIG.flatten()); 
     
     # Run (maybe compile too if necessary) CUDA code that does f-k migration
-    if platform == "darwin":
+    if (platform == "darwin") or (platform == "linux"):
         if not(os.path.isfile("fkmigCUDA.out")):
             os.system("nvcc fkmigCUDA.cu -o fkmigCUDA.out -I/usr/local/cuda/include -L/usr/local/cuda/lib -lcufft");
         os.system("./fkmigCUDA.out SIG.txt "+str(nt)+" "+str(nx)+" "+str(fs)+" "+str(pitch)+" "+str(TXangle)+" "+str(c)+" "+str(t0)+" migSIG.txt");
@@ -66,7 +68,7 @@ def fkmig(SIG, fs, pitch, TXangle = 0, c = 1540, t0 = 0):
     migSIG = np.loadtxt("migSIG.txt").reshape((nt, nx)); 
     
     # Delete the text files created in this process
-    if platform == "darwin":
+    if (platform == "darwin") or (platform == "linux"):
         os.system("rm SIG.txt");
         os.system("rm migSIG.txt");
     elif "win" in platform.lower():

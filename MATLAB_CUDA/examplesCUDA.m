@@ -1,6 +1,6 @@
 % ---------------------------------------------------------------
 % Stolt's f-k migration for plane wave ultrasound imaging
-% Garcia D, Le Tarnec L, Muth S, Montagnon E, Porée J, Cloutier G
+% Garcia D, Le Tarnec L, Muth S, Montagnon E, Porï¿½e J, Cloutier G
 % IEEE UFFC
 % RUBIC & LBUM, CRCHUM, Montreal
 % 03/2013
@@ -31,10 +31,10 @@ RF2 = double(RF2); RF2 = RF2-mean2(RF2);
 
 %% Example #1: Nylon fibers
 h = helpdlg('Example #1: Gammex phantom, Nylon fibers','Example 1');
-uiwait(h)
+uiwait(h);
 %---
 % f-k migration
-migRF1 = fkmigCUDA(RF1,param1);
+migRF1 = fkmigCUDAwrapper(RF1,param1);
 % real envelope
 im1 = abs(hilbert(migRF1)).^.7;
 % figure #1
@@ -50,10 +50,10 @@ ylabel('depth (m)')
 
 %% Example #2: Circular targets
 h = helpdlg('Example #2: Gammex phantom, Circular targets','Example 2');
-uiwait(h)
+uiwait(h);
 %---
 % f-k migration
-migRF2 = fkmigCUDA(RF2,param2);
+migRF2 = fkmigCUDAwrapper(RF2,param2);
 % real envelope
 im2 = sqrt(abs(hilbert(migRF2)));
 % figure #2
@@ -69,13 +69,13 @@ ylabel('depth (m)')
 
 %% Example #3: EZFKMIG
 h = helpdlg('Example #3: before vs. after migration','Example 3');
-uiwait(h)
+uiwait(h);
 %---
 % Note: EZFKMIG works with horizontal plane waves only.
 RF3 = RF1(:,:,4); % RF data with angle = 0
 param3 = param1; param3.TXangle = 0;
 % f-k migration
-migRF3 = fkmigCUDA(RF3,param3);
+migRF3 = fkmigCUDAwrapper(RF3,param3);
 % real envelope
 im3 = abs(hilbert(RF3)).^.7;
 im3_mig = abs(hilbert(migRF3)).^.7;

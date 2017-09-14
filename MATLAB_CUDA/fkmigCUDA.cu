@@ -1,6 +1,7 @@
 // To Compile: nvcc fkmigCUDA.cu -o fkmigCUDA.out -I/usr/local/cuda/include -L/usr/local/cuda/lib -lcufft
 // To Run: ./fkmigCUDA.out SIG.txt nt nx fs pitch TXangle c t0 migSIG.txt
 
+#include "mex.h"
 #include <cufft.h>
 #include <stdio.h>
 #include <math.h>
@@ -100,7 +101,6 @@ __global__ void stoltmap(cufftComplex *SIG, float *f0, float *kx, int ntFFT, int
 	if (kx_idx == 0 && f0_idx == 0) {
 		SIG[0].x = 0;
 		SIG[0].y = 0;
-		printf("Am I even alive? %d, %d\n", f0_idx, kx_idx);
 	}
 	else if (kx_idx < nxFFT && f0_idx < ntFFT / 2 + 1) {
 		// Note: we choose kz = 2*f/c (i.e. z = c*t/2)
@@ -156,26 +156,39 @@ __global__ void steerComp(cufftComplex *SIG, int nxFFT, int ntFFT, float *kx, fl
 	}
 }
 
-// Main Host Function
-int main(int argc, char* argv[]) {
-	cudaError_t e;
 
-	// Gather values from inputs 
-	int nt = strtol(argv[2], NULL, 10);
-	int nx = strtol(argv[3], NULL, 10);
-	float fs = atof(argv[4]);
-	float pitch = atof(argv[5]);
-	float TXangle = atof(argv[6]);
-	float c = atof(argv[7]);
-	float t0 = atof(argv[8]);
+// Gateway function
+void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
 
-	// Zero-padding before FFTs 
+	cudaDeviceReset();
+
+    // Argument check
+	if (nrhs != 6)	{ mexErrMsgTxt("Wrong number of inputs.\n"); }
+  if (nlhs != 1)	{ mexErrMsgTxt("Wrong number of outputs.\n"); }
+
+  cudaError_t e;
+
+  // Gather values from inputs
+  double *SIGinput = (double *)mxGetData(prhs[0]);
+  const mwSize *dimsSIG = mxGetDimensions(prhs[0]);
+  mwSize nx = dimsSIG[0]; // Number of Array Elements [ROWS]
+  mwSize nt = dimsSIG[1]; // Number of Time Points [COLUMNS]
+  float fs = mxGetScalar(prhs[1]); // Frequency [Hz]
+  float pitch = mxGetScalar(prhs[2]); // Element Pitch [m]
+	float TXangle = mxGetScalar(prhs[3]); // TX Angle [rad]
+	float c = mxGetScalar(prhs[4]); // Sound Speed [m/s]
+	float t0 = mxGetScalar(prhs[5]); // Acquisition Start Time [s]
+	mexPrintf("Loaded all Inputs:\nfs: %f\npitch: %f\nTXangle: %f\nc: %f\nt0: %f\n\n", fs, pitch, TXangle, c, t0);
+	mexPrintf("Input Signals:\nNumber of Elements: %d\nNumber of Time Points: %d\n\n", nx, nt);
+
+  // Zero-padding before FFTs
 	// Time direction: extensive zero-padding is required with linear interpolation
 	int ntshift = (int)(2 * ceil(t0*fs / 2));
 	int ntFFT = 4 * nt + ntshift;
 	// X direction: in order to avoid lateral edge effects
 	float factor = 1.5f;
 	int nxFFT = (int)(2 * ceil(factor*nx / 2));
+	mexPrintf("ntFFT: %d\nnxFFT: %d\n\n", ntFFT, nxFFT);
 	// Write values in for f0
 	float* f0 = (float *)malloc(sizeof(float) * (ntFFT / 2 + 1));
 	for (int i = 0; i < ntFFT / 2 + 1; i++)
@@ -191,6 +204,10 @@ int main(int argc, char* argv[]) {
 	cudaMemcpy(d_f0, f0, (ntFFT / 2 + 1) * sizeof(float), cudaMemcpyHostToDevice);
 	cudaMemcpy(d_kx, kx, nxFFT * sizeof(float), cudaMemcpyHostToDevice);
 
+
+
+	mexPrintf("Zero-padding before FFTs\n");
+
 	// Read Signals Into Host Array and Copy to Device
 	cufftComplex *SIG = (cufftComplex *)malloc(ntFFT*nxFFT*sizeof(cufftComplex));
 	for (int jj = 0; jj < ntFFT; jj++) {
@@ -199,13 +216,9 @@ int main(int argc, char* argv[]) {
 			SIG[ii + jj*nxFFT].y = 0;
 		}
 	}
-	FILE *in = fopen(argv[1], "r");
-	if (in == NULL) { fprintf(stderr, "Input file has issues. Please Check."); exit(1); }
-	float datfromfile;
 	for (int jj = 0; jj < nt; jj++) {
 		for (int ii = 0; ii < nx; ii++) {
-			fscanf(in, "%f", &datfromfile);
-			SIG[ii + jj*nxFFT].x = datfromfile;
+			SIG[ii + jj*nxFFT].x = (float) SIGinput[ii + jj*nx];
 			SIG[ii + jj*nxFFT].y = 0;
 		}
 	}
@@ -215,7 +228,9 @@ int main(int argc, char* argv[]) {
 	cudaMemcpy(d_SIG, SIG, ntFFT * nxFFT * sizeof(cufftComplex), cudaMemcpyHostToDevice);
 
 	e = cudaGetLastError();
-	if (e) printf("Error After Reading Signals and Writing to Device Array: %d %s\n", e, cudaGetErrorString(e));
+	if (e) mexPrintf("Error After Reading Signals and Writing to Device Array: %d %s\n", e, cudaGetErrorString(e));
+
+	mexPrintf("Signals Read Into Host Array and Copied to Device\n");
 
 	// Take Temporal FFT
 	dim3 dimBlock(16, 16, 1);
@@ -229,7 +244,9 @@ int main(int argc, char* argv[]) {
 	transpose << <dimGridT, dimBlockT >> >(d_SIG, d_SIG_t, nxFFT, ntFFT);
 
 	e = cudaGetLastError();
-	if (e) printf("Error After Temporal FFT: %d %s\n", e, cudaGetErrorString(e));
+	if (e) mexPrintf("Error After Temporal FFT: %d %s\n", e, cudaGetErrorString(e));
+
+	mexPrintf("Temporal FFT Complete\n");
 
 	// ERM velocity
 	float sinA = sinf(TXangle);
@@ -254,6 +271,8 @@ int main(int argc, char* argv[]) {
 
 	e = cudaGetLastError();
 	if (e) printf("Error After Azimuthal FFT: %d %s\n", e, cudaGetErrorString(e));
+
+	mexPrintf("Steering Angle Compensation Complete\n");
 
 	// Perform Stolt Mapping
 	removeEvanescent << <dimGrid, dimBlock >> >(d_SIG, d_f0, ntFFT / 2 + 1, d_kx, nxFFT, c);
@@ -307,9 +326,12 @@ int main(int argc, char* argv[]) {
 	// Invoke Stolt Mapping Kernel
 	float beta = (1 + cosA) * sqrt(1 + cosA) / (1 + cosA + sinA * sinA);
 	stoltmap << <dimGridTex, dimBlockTex >> >(d_SIGforTexture, d_f0, d_kx, ntFFT, nxFFT, c, v, beta, fs);
-	
+
 	e = cudaGetLastError();
-	if (e) printf("Error After Stolt Mapping: %d %s\n", e, cudaGetErrorString(e));
+	if (e) mexPrintf("Error After Stolt Mapping: %d %s\n", e, cudaGetErrorString(e));
+
+	mexPrintf("Stolt Mapping Complete\n");
+
 
 	// Take Axial IFFT
 	concatNegAxialFreq << <dimGrid, dimBlock >> >(d_SIG, d_SIGforTexture, ntFFT, nxFFT);
@@ -318,35 +340,50 @@ int main(int argc, char* argv[]) {
 	transpose << <dimGridT, dimBlockT >> >(d_SIG, d_SIG_t, nxFFT, ntFFT);
 
 	e = cudaGetLastError();
-	if (e) printf("Error After Axial IFFT: %d %s\n", e, cudaGetErrorString(e));
+	if (e) mexPrintf("Error After Axial IFFT: %d %s\n", e, cudaGetErrorString(e));
+
+	mexPrintf("Axial IFFT Complete\n");
+
+
 
 	// Steering Angle Compensation
 	float gamma = sinA / (2 - cosA);
 	steerComp << <dimGrid, dimBlock >> >(d_SIG, nxFFT, ntFFT, d_kx, fs, c, gamma);
 
 	e = cudaGetLastError();
-	if (e) printf("Error After Steering Angle Compensation: %d %s\n", e, cudaGetErrorString(e));
+	if (e) mexPrintf("Error After Steering Angle Compensation: %d %s\n", e, cudaGetErrorString(e));
+
+	mexPrintf("Steering Angle Compensation\n");
+
 
 	// Take Spatial IFFT
 	batchedIFFT(d_SIG, nxFFT, ntFFT);
 	cudaMemcpy(SIG, d_SIG, ntFFT * nxFFT * sizeof(cufftComplex), cudaMemcpyDeviceToHost);
 
 	e = cudaGetLastError();
-	if (e) printf("Error After Spatial IFFT: %d %s\n", e, cudaGetErrorString(e));
+	if (e) mexPrintf("Error After Spatial IFFT: %d %s\n", e, cudaGetErrorString(e));
+
+	mexPrintf("Spatial IFFT Complete\n");
 
 	// Write final migrated signal to file
-	FILE *out = fopen(argv[9], "w");
-	if (out == NULL) { printf("Error opening file!\n"); exit(1); }
+	plhs[0] = mxCreateDoubleMatrix( nx, nt, mxREAL);
+  double *migSIG = (double *)mxGetPr(plhs[0]);
 	for (int jj = 0; jj < nt; jj++) {
 		for (int ii = 0; ii < nx; ii++) {
-			fprintf(out, "%f\n", SIG[ii + (jj+ntshift)*nxFFT].x);
+			migSIG[ii + jj*nx] = (double) SIG[ii + (jj+ntshift)*nxFFT].x;
 		}
 	}
-	
+
+
+	//plhs[0] = mxCreateDoubleMatrix( nx, nt, mxREAL);
+
+
 	// Free all allocated memory
 	cudaFree(d_SIG);
 	cudaFree(d_SIG_t);
 	cudaFree(d_SIGforTexture);
 	cudaFree(d_SIGreal);
 	cudaFree(d_SIGimag);
+
+
 }

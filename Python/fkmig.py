@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """
 Created on Tue Sep  6 10:57:23 2016
-
 @author: rehmanali
 """
 
@@ -136,4 +135,4 @@ def fkmig(SIG, fs, pitch, TXangle = 0, c = 1540, t0 = 0):
     z = (np.arange(nt))*c/2/fs;
     
     return x, z, migSIG;
-    
+
