@@ -48,8 +48,6 @@ def fkmig(SIG, fs, pitch, TXangle = 0, c = 1540, t0 = 0):
     Garcia et al., Stolt's f-k migration for plane wave ultrasound imaging.
     IEEE Trans Ultrason Ferroelectr Freq Control, 2013;60:1853-1867. """
 
-    pdb.set_trace();
-
     # Get the dimensions of the data
     nt, nx = SIG.shape;  
     

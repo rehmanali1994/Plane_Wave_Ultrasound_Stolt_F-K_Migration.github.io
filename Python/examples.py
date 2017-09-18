@@ -32,7 +32,7 @@ im1_mig = (np.abs(hilbert(np.real(migRF1))))**0.7;
 exts = (np.min(x1)-np.mean(np.diff(x1)), np.max(x1)+np.mean(np.diff(x1)), \
     np.min(z1)-np.mean(np.diff(z1)), np.max(z1)-np.mean(np.diff(z1)))
 plt.title('F-K Migrated Point Targets\n7 Angles Compounded\n$(-1.5^o : 0.5^o : 1.5^o)$');
-plt.imshow(np.flipud(im1_mig), cmap = 'gray', extent = exts);
+plt.imshow(np.flipud(im1_mig), cmap = 'gray', extent = exts, interpolation='none');
 plt.xticks(0.01*np.arange(-1,2));
 plt.yticks(0.01*np.arange(11)); 
 plt.gca().invert_yaxis()
@@ -41,7 +41,6 @@ plt.show();
 
 #-- Example #2: Circular Targets
 migRF2 = np.zeros(RF2[:,:,0].shape, dtype = 'complex128');
-pdb.set_trace();
 for idx in np.arange(7):
     x2, z2, migRF_idx = fkmig(RF2[:,:,idx], np.double(param2['fs']), \
         np.double(param2['pitch']), TXangle = np.double(param2['TXangle'][0][:,idx]), \
@@ -51,7 +50,7 @@ im2_mig = (np.abs(hilbert(np.real(migRF2))))**0.5;
 exts = (np.min(x2)-np.mean(np.diff(x2)), np.max(x2)+np.mean(np.diff(x2)), \
     np.min(z2)-np.mean(np.diff(z2)), np.max(z2)-np.mean(np.diff(z2)))
 plt.title('F-K Migrated Circular Cysts\n7 Angles Compounded\n$(-1.5^o : 0.5^o : 1.5^o)$');
-plt.imshow(np.flipud(im2_mig), cmap = 'gray', extent = exts);
+plt.imshow(np.flipud(im2_mig), cmap = 'gray', extent = exts, interpolation='none');
 plt.xticks(0.01*np.arange(-1,2));
 plt.yticks(0.01*np.arange(6)); 
 plt.gca().invert_yaxis()
@@ -67,7 +66,7 @@ im = (np.abs(hilbert(np.real(RF1[:,:,idx]))))**0.7;
 exts = (np.min(x1)-np.mean(np.diff(x1)), np.max(x1)+np.mean(np.diff(x1)), \
     np.min(z1)-np.mean(np.diff(z1)), np.max(z1)-np.mean(np.diff(z1)))
 plt.subplot(121); plt.title('RF Data Before Migration')
-plt.imshow(im, cmap = 'gray', extent = exts);
+plt.imshow(im, cmap = 'gray', extent = exts, interpolation='none');
 plt.xticks(0.01*np.arange(-1,2));
 plt.yticks(0.01*np.arange(10));
 plt.xlabel('Azimuth (m)'); plt.ylabel('Depth (m)');

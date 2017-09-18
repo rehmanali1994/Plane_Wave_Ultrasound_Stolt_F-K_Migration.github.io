@@ -1,6 +1,6 @@
 % ---------------------------------------------------------------
 % Stolt's f-k migration for plane wave ultrasound imaging
-% Garcia D, Le Tarnec L, Muth S, Montagnon E, Porée J, Cloutier G
+% Garcia D, Le Tarnec L, Muth S, Montagnon E, Porï¿½e J, Cloutier G
 % IEEE UFFC
 % RUBIC & LBUM, CRCHUM, Montreal
 % 03/2013
@@ -36,14 +36,15 @@ uiwait(h)
 % f-k migration
 migRF1 = fkmig(RF1,param1);
 % real envelope
-im1 = abs(hilbert(migRF1)).^.7;
+im1 = 20*log10(abs(hilbert(migRF1)));
 % figure #1
 x = (0:127)*param1.pitch;
 z = (0:size(RF1,1)-1)/param1.fs*param1.c/2;
-f1 = figure(1);
-imagesc(x,z,im1)
+f1 = figure;
+imagesc(x,z,im1-max(im1(:)),[-60,0]);
 axis equal tight
 colormap gray
+colorbar()
 title('Example #1: \it{f-k} migration with FKMIG','FontWeight','bold')
 xlabel('7 angles: -1.5^{o}:0.5^{o}:1.5^{o}','FontWeight','bold')
 ylabel('depth (m)')
@@ -57,14 +58,15 @@ param2.p = 3; % a 3-point sinc interpolator is used
 param2.passband = [.3 .7]; % a bandpass filter is used
 migRF2 = fkmig(RF2,param2);
 % real envelope
-im2 = sqrt(abs(hilbert(migRF2)));
+im2 = 20*log10(abs(hilbert(migRF2)));
 % figure #2
 x = (0:127)*param2.pitch;
 z = (0:size(RF2,1)-1)/param2.fs*param2.c/2;
-f2 = figure(2);
-imagesc(x,z,im2)
+f2 = figure;
+imagesc(x,z,im2-max(im2(:)),[-60,0]);
 axis equal tight
 colormap gray
+colorbar()
 title('Example #2: \it{f-k} migration with FKMIG','FontWeight','bold')
 xlabel('7 angles: -1.5^{o}:0.5^{o}:1.5^{o}','FontWeight','bold')
 ylabel('depth (m)')
@@ -84,7 +86,7 @@ im3_mig = abs(hilbert(migRF3)).^.7;
 % figure #3
 x = (0:127)*param3.pitch;
 z = (0:size(RF3,1)-1)/param3.fs*param3.c/2;
-f3 = figure(3);
+f3 = figure;
 % before migration
 subplot(121)
 imagesc(x,z,im3)

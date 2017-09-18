@@ -1,15 +1,28 @@
 // To Compile: nvcc fkmigCUDA.cu -o fkmigCUDA.out -I/usr/local/cuda/include -L/usr/local/cuda/lib -lcufft
 // To Run: ./fkmigCUDA.out SIG.txt nt nx fs pitch TXangle c t0 migSIG.txt
 
-#include "mex.h"
-#include <cufft.h>
 #include <stdio.h>
+#include <cuda.h>
+#include <typeinfo>
+#include <iostream>
+#include <mex.h>
+#include <helper_cuda.h>
+#include <cufft.h>
 #include <math.h>
-#define pi acosf(-1.0f)
 
-// 1D Layered Textures for Real and Imaginary Parts of Spatiotemporal Frequency Domain of Signals
-texture<float, cudaTextureType1DLayered, cudaReadModeElementType> texRefReal;
-texture<float, cudaTextureType1DLayered, cudaReadModeElementType> texRefImag;
+// Define macros for excessively long names
+#define pi 3.141592653589793238462643383279502884197169399375105820974f
+#define CCE checkCudaErrors
+#define HtoD cudaMemcpyHostToDevice
+#define DtoH cudaMemcpyDeviceToHost
+
+// CUDA Texture Objects for Real and Imaginary Parts of Spatiotemporal Frequency Domain of Signals
+static cudaTextureObject_t texObjReal;
+static cudaTextureDesc texDescReal;
+static cudaResourceDesc resDescReal;
+static cudaTextureObject_t texObjImag;
+static cudaTextureDesc texDescImag;
+static cudaResourceDesc resDescImag;
 
 // Runs batched FFT and IFFT on device data
 void batchedFFT(cufftComplex* dData, int N, int BATCH) {
@@ -30,7 +43,7 @@ void batchedIFFT(cufftComplex* dData, int N, int BATCH) {
 		fprintf(stderr, "CUFFT error: Plan creation failed");
 	}
 	if (cufftExecC2C(plan, dData, dData, CUFFT_INVERSE) != CUFFT_SUCCESS){
-		fprintf(stderr, "CUFFT error: ExecC2C Forward failed");
+		fprintf(stderr, "CUFFT error: ExecC2C Inverse failed");
 	}
 	if (cudaThreadSynchronize() != cudaSuccess){
 		fprintf(stderr, "Cuda error: Failed to synchronize\n");
@@ -93,7 +106,7 @@ __global__ void getRealAndImag(cufftComplex *cmpdata, float *realdata, float *im
 }
 
 // Run Stolt Mapping Kernel
-__global__ void stoltmap(cufftComplex *SIG, float *f0, float *kx, int ntFFT, int nxFFT, float c, float v, float beta, float fs)
+__global__ void stoltmap(cufftComplex *SIG, float *f0, float *kx, int ntFFT, int nxFFT, float c, float v, float beta, float fs, cudaTextureObject_t texObjReal, cudaTextureObject_t texObjImag)
 {
 	int f0_idx = blockIdx.x*blockDim.x + threadIdx.x;
 	int kx_idx = blockIdx.y*blockDim.y + threadIdx.y;
@@ -110,8 +123,8 @@ __global__ void stoltmap(cufftComplex *SIG, float *f0, float *kx, int ntFFT, int
 		__syncthreads();
 		// Linear interpolation in the frequency domain: f -> fkz
 		float fkz_idx = (fkz / (fs / ntFFT)) + 0.5f;
-		float SIGreal = tex1DLayered(texRefReal, fkz_idx, kx_idx);
-		float SIGimag = tex1DLayered(texRefImag, fkz_idx, kx_idx);
+		float SIGreal = tex1DLayered<float>(texObjReal, fkz_idx, kx_idx);
+		float SIGimag = tex1DLayered<float>(texObjImag, fkz_idx, kx_idx);
 		__syncthreads();
 		// Multiply By Obliquity factor: f / fkz
 		SIG[kx_idx + f0_idx * nxFFT].x = SIGreal * f / fkz;
@@ -149,7 +162,7 @@ __global__ void steerComp(cufftComplex *SIG, int nxFFT, int ntFFT, float *kx, fl
 	if (kx_idx < nxFFT && t_idx < ntFFT) {
 		float realSIG = SIG[kx_idx + t_idx * nxFFT].x;
 		float imagSIG = SIG[kx_idx + t_idx * nxFFT].y;
-		float dx = -gamma*t_idx / fs*c / 2;
+		float dx = -gamma*t_idx / fs * c / 2;
 		float phase = -2 * pi * kx[kx_idx] * dx;
 		SIG[kx_idx + t_idx * nxFFT].x = realSIG * cosf(phase) - imagSIG * sinf(phase);
 		SIG[kx_idx + t_idx * nxFFT].y = realSIG * sinf(phase) + imagSIG * cosf(phase);
@@ -160,13 +173,9 @@ __global__ void steerComp(cufftComplex *SIG, int nxFFT, int ntFFT, float *kx, fl
 // Gateway function
 void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
 
-	cudaDeviceReset();
-
-    // Argument check
+	// Argument check
 	if (nrhs != 6)	{ mexErrMsgTxt("Wrong number of inputs.\n"); }
   if (nlhs != 1)	{ mexErrMsgTxt("Wrong number of outputs.\n"); }
-
-  cudaError_t e;
 
   // Gather values from inputs
   double *SIGinput = (double *)mxGetData(prhs[0]);
@@ -178,8 +187,6 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
 	float TXangle = mxGetScalar(prhs[3]); // TX Angle [rad]
 	float c = mxGetScalar(prhs[4]); // Sound Speed [m/s]
 	float t0 = mxGetScalar(prhs[5]); // Acquisition Start Time [s]
-	mexPrintf("Loaded all Inputs:\nfs: %f\npitch: %f\nTXangle: %f\nc: %f\nt0: %f\n\n", fs, pitch, TXangle, c, t0);
-	mexPrintf("Input Signals:\nNumber of Elements: %d\nNumber of Time Points: %d\n\n", nx, nt);
 
   // Zero-padding before FFTs
 	// Time direction: extensive zero-padding is required with linear interpolation
@@ -188,7 +195,6 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
 	// X direction: in order to avoid lateral edge effects
 	float factor = 1.5f;
 	int nxFFT = (int)(2 * ceil(factor*nx / 2));
-	mexPrintf("ntFFT: %d\nnxFFT: %d\n\n", ntFFT, nxFFT);
 	// Write values in for f0
 	float* f0 = (float *)malloc(sizeof(float) * (ntFFT / 2 + 1));
 	for (int i = 0; i < ntFFT / 2 + 1; i++)
@@ -199,14 +205,10 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
 		kx[i] = (float)((i > nxFFT / 2) ? i - nxFFT : i) / pitch / nxFFT;
 	// Convert both f0 and kx to device arrays
 	float *d_f0, *d_kx;
-	cudaMalloc(&d_f0, (ntFFT / 2 + 1) * sizeof(float));
-	cudaMalloc(&d_kx, nxFFT * sizeof(float));
-	cudaMemcpy(d_f0, f0, (ntFFT / 2 + 1) * sizeof(float), cudaMemcpyHostToDevice);
-	cudaMemcpy(d_kx, kx, nxFFT * sizeof(float), cudaMemcpyHostToDevice);
-
-
-
-	mexPrintf("Zero-padding before FFTs\n");
+	CCE(cudaMalloc(&d_f0, (ntFFT / 2 + 1) * sizeof(float)));
+	CCE(cudaMalloc(&d_kx, nxFFT * sizeof(float)));
+	CCE(cudaMemcpy(d_f0, f0, (ntFFT / 2 + 1) * sizeof(float), HtoD));
+	CCE(cudaMemcpy(d_kx, kx, nxFFT * sizeof(float), HtoD));
 
 	// Read Signals Into Host Array and Copy to Device
 	cufftComplex *SIG = (cufftComplex *)malloc(ntFFT*nxFFT*sizeof(cufftComplex));
@@ -223,14 +225,9 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
 		}
 	}
 	cufftComplex *d_SIG, *d_SIG_t;
-	cudaMalloc(&d_SIG, ntFFT * nxFFT * sizeof(cufftComplex));
-	cudaMalloc(&d_SIG_t, ntFFT * nxFFT * sizeof(cufftComplex));
-	cudaMemcpy(d_SIG, SIG, ntFFT * nxFFT * sizeof(cufftComplex), cudaMemcpyHostToDevice);
-
-	e = cudaGetLastError();
-	if (e) mexPrintf("Error After Reading Signals and Writing to Device Array: %d %s\n", e, cudaGetErrorString(e));
-
-	mexPrintf("Signals Read Into Host Array and Copied to Device\n");
+	CCE(cudaMalloc(&d_SIG, ntFFT * nxFFT * sizeof(cufftComplex)));
+	CCE(cudaMalloc(&d_SIG_t, ntFFT * nxFFT * sizeof(cufftComplex)));
+	CCE(cudaMemcpy(d_SIG, SIG, ntFFT * nxFFT * sizeof(cufftComplex), HtoD));
 
 	// Take Temporal FFT
 	dim3 dimBlock(16, 16, 1);
@@ -243,11 +240,6 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
 		(nxFFT + dimBlock.y - 1) / dimBlock.y, 1);
 	transpose << <dimGridT, dimBlockT >> >(d_SIG, d_SIG_t, nxFFT, ntFFT);
 
-	e = cudaGetLastError();
-	if (e) mexPrintf("Error After Temporal FFT: %d %s\n", e, cudaGetErrorString(e));
-
-	mexPrintf("Temporal FFT Complete\n");
-
 	// ERM velocity
 	float sinA = sinf(TXangle);
 	float cosA = cosf(TXangle);
@@ -259,30 +251,22 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
 	for (int i = 0; i < nx; i++)
 		dt[i] = (float)((TXangle < 0) ? nx - 1 - i : -i)*sinA*pitch / c;
 	float *d_dt;
-	cudaMalloc(&d_dt, nx * sizeof(float));
-	cudaMemcpy(d_dt, dt, nx * sizeof(float), cudaMemcpyHostToDevice);
+	CCE(cudaMalloc(&d_dt, nx * sizeof(float)));
+	CCE(cudaMemcpy(d_dt, dt, nx * sizeof(float), cudaMemcpyHostToDevice));
 	rfTrim << <dimGrid, dimBlock >> >(d_SIG, ntFFT / 2 + 1, nx, nxFFT, d_dt, d_f0, t0);
-
-	e = cudaGetLastError();
-	if (e) printf("Error After RF Trimming: %d %s\n", e, cudaGetErrorString(e));
 
 	// Take Azimuthal (Spatial) FFT
 	batchedFFT(d_SIG, nxFFT, ntFFT / 2 + 1);
-
-	e = cudaGetLastError();
-	if (e) printf("Error After Azimuthal FFT: %d %s\n", e, cudaGetErrorString(e));
-
-	mexPrintf("Steering Angle Compensation Complete\n");
 
 	// Perform Stolt Mapping
 	removeEvanescent << <dimGrid, dimBlock >> >(d_SIG, d_f0, ntFFT / 2 + 1, d_kx, nxFFT, c);
 	// Separate real and imaginary components
 	cufftComplex *d_SIGforTexture;
-	cudaMalloc(&d_SIGforTexture, (ntFFT / 2 + 1) * nxFFT * sizeof(cufftComplex));
+	CCE(cudaMalloc(&d_SIGforTexture, (ntFFT / 2 + 1) * nxFFT * sizeof(cufftComplex)));
 	transpose << <dimGrid, dimBlock >> >(d_SIGforTexture, d_SIG, ntFFT / 2 + 1, nxFFT);
 	float *d_SIGreal, *d_SIGimag;
-	cudaMalloc(&d_SIGreal, (ntFFT / 2 + 1) * nxFFT * sizeof(float));
-	cudaMalloc(&d_SIGimag, (ntFFT / 2 + 1) * nxFFT * sizeof(float));
+	CCE(cudaMalloc(&d_SIGreal, (ntFFT / 2 + 1) * nxFFT * sizeof(float)));
+	CCE(cudaMalloc(&d_SIGimag, (ntFFT / 2 + 1) * nxFFT * sizeof(float)));
 	dim3 dimBlockTex(16, 16, 1);
 	dim3 dimGridTex((ntFFT / 2 + dimBlock.x) / dimBlock.x,
 		(nxFFT + dimBlock.y - 1) / dimBlock.y, 1);
@@ -290,48 +274,58 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
 	// Write real and imaginary parts back to host memory
 	float *SIGreal = (float *)malloc(nxFFT * (ntFFT / 2 + 1) * sizeof(float));
 	float *SIGimag = (float *)malloc(nxFFT * (ntFFT / 2 + 1) * sizeof(float));
-	cudaMemcpy(SIGreal, d_SIGreal, nxFFT * (ntFFT / 2 + 1) * sizeof(float), cudaMemcpyDeviceToHost);
-	cudaMemcpy(SIGimag, d_SIGimag, nxFFT * (ntFFT / 2 + 1) * sizeof(float), cudaMemcpyDeviceToHost);
+	CCE(cudaMemcpy(SIGreal, d_SIGreal, nxFFT * (ntFFT / 2 + 1) * sizeof(float), DtoH));
+	CCE(cudaMemcpy(SIGimag, d_SIGimag, nxFFT * (ntFFT / 2 + 1) * sizeof(float), DtoH));
+
 	// Make the Spatio-Temporal Fourier Domain of the Signals a Texture
 	// Real Part
-	cudaExtent extentDescReal = make_cudaExtent(ntFFT/2+1, 0, nxFFT);  // <-- 0 height required for 1Dlayered
-	cudaChannelFormatDesc channelDescReal = cudaCreateChannelDesc(32, 0, 0, 0, cudaChannelFormatKindFloat);
+	// Create CUDA Array to Interpolate on
+	cudaExtent extentDescReal = make_cudaExtent(ntFFT/2+1, 0, nxFFT);  // <-- 0 height required for 1D-Layered
+	cudaChannelFormatDesc channelDescReal = cudaCreateChannelDesc<float>();
 	cudaMemcpy3DParms mParamsReal = { 0 };
 	mParamsReal.srcPtr = make_cudaPitchedPtr(SIGreal, (ntFFT / 2 + 1) * sizeof(float), ntFFT / 2 + 1, 1);
 	mParamsReal.kind = cudaMemcpyHostToDevice;
 	mParamsReal.extent = make_cudaExtent(ntFFT / 2 + 1, 1, nxFFT);
 	cudaArray* cuArrayReal;
-	cudaMalloc3DArray(&cuArrayReal, &channelDescReal, extentDescReal, cudaArrayLayered);
+	CCE(cudaMalloc3DArray(&cuArrayReal, &channelDescReal, extentDescReal, cudaArrayLayered));
 	mParamsReal.dstArray = cuArrayReal;
-	cudaMemcpy3D(&mParamsReal);
-	texRefReal.addressMode[0] = cudaAddressModeBorder;
-	texRefReal.filterMode = cudaFilterModeLinear;
-	texRefReal.normalized = false;
-	cudaBindTextureToArray(texRefReal, cuArrayReal, channelDescReal);
+	CCE(cudaMemcpy3D(&mParamsReal));
+	// Texture Description
+	texDescReal.addressMode[0] = cudaAddressModeBorder;
+	texDescReal.filterMode = cudaFilterModeLinear;
+	texDescReal.normalizedCoords = 0; // false -- Not using normalized coords
+	texDescReal.readMode = cudaReadModeElementType;
+	// Resource Description
+	resDescReal.resType = cudaResourceTypeArray;
+  resDescReal.res.array.array = cuArrayReal;
+	// Create CUDA Texture Object from Texture and Resource Descriptions
+	CCE(cudaCreateTextureObject(&texObjReal, &resDescReal, &texDescReal, NULL));
 	// Imaginary Part
-	cudaExtent extentDescImag = make_cudaExtent(ntFFT / 2 + 1, 0, nxFFT);  // <-- 0 height required for 1Dlayered
-	cudaChannelFormatDesc channelDescImag = cudaCreateChannelDesc(32, 0, 0, 0, cudaChannelFormatKindFloat);
+	// Create CUDA Array to Interpolate on
+	cudaExtent extentDescImag = make_cudaExtent(ntFFT / 2 + 1, 0, nxFFT);  // <-- 0 height required for 1D-Layered
+	cudaChannelFormatDesc channelDescImag = cudaCreateChannelDesc<float>();
 	cudaMemcpy3DParms mParamsImag = { 0 };
 	mParamsImag.srcPtr = make_cudaPitchedPtr(SIGimag, (ntFFT / 2 + 1) * sizeof(float), ntFFT / 2 + 1, 1);
 	mParamsImag.kind = cudaMemcpyHostToDevice;
 	mParamsImag.extent = make_cudaExtent(ntFFT / 2 + 1, 1, nxFFT);
 	cudaArray* cuArrayImag;
-	cudaMalloc3DArray(&cuArrayImag, &channelDescImag, extentDescImag, cudaArrayLayered);
+	CCE(cudaMalloc3DArray(&cuArrayImag, &channelDescImag, extentDescImag, cudaArrayLayered));
 	mParamsImag.dstArray = cuArrayImag;
-	cudaMemcpy3D(&mParamsImag);
-	texRefImag.addressMode[0] = cudaAddressModeBorder;
-	texRefImag.filterMode = cudaFilterModeLinear;
-	texRefImag.normalized = false;
-	cudaBindTextureToArray(texRefImag, cuArrayImag, channelDescImag);
+	CCE(cudaMemcpy3D(&mParamsImag));
+	// Texture Description
+	texDescImag.addressMode[0] = cudaAddressModeBorder;
+	texDescImag.filterMode = cudaFilterModeLinear;
+	texDescReal.normalizedCoords = 0; // false -- Not using normalized coords
+	texDescImag.readMode = cudaReadModeElementType;
+	// Resource Description
+	resDescImag.resType = cudaResourceTypeArray;
+  resDescImag.res.array.array = cuArrayImag;
+	// Create CUDA Texture Object from Texture and Resource Descriptions
+	CCE(cudaCreateTextureObject(&texObjImag, &resDescImag, &texDescImag, NULL));
+
 	// Invoke Stolt Mapping Kernel
 	float beta = (1 + cosA) * sqrt(1 + cosA) / (1 + cosA + sinA * sinA);
-	stoltmap << <dimGridTex, dimBlockTex >> >(d_SIGforTexture, d_f0, d_kx, ntFFT, nxFFT, c, v, beta, fs);
-
-	e = cudaGetLastError();
-	if (e) mexPrintf("Error After Stolt Mapping: %d %s\n", e, cudaGetErrorString(e));
-
-	mexPrintf("Stolt Mapping Complete\n");
-
+	stoltmap << <dimGridTex, dimBlockTex >> >(d_SIGforTexture, d_f0, d_kx, ntFFT, nxFFT, c, v, beta, fs, texObjReal, texObjImag);
 
 	// Take Axial IFFT
 	concatNegAxialFreq << <dimGrid, dimBlock >> >(d_SIG, d_SIGforTexture, ntFFT, nxFFT);
@@ -339,31 +333,13 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
 	batchedIFFT(d_SIG_t, ntFFT, nxFFT);
 	transpose << <dimGridT, dimBlockT >> >(d_SIG, d_SIG_t, nxFFT, ntFFT);
 
-	e = cudaGetLastError();
-	if (e) mexPrintf("Error After Axial IFFT: %d %s\n", e, cudaGetErrorString(e));
-
-	mexPrintf("Axial IFFT Complete\n");
-
-
-
 	// Steering Angle Compensation
 	float gamma = sinA / (2 - cosA);
 	steerComp << <dimGrid, dimBlock >> >(d_SIG, nxFFT, ntFFT, d_kx, fs, c, gamma);
 
-	e = cudaGetLastError();
-	if (e) mexPrintf("Error After Steering Angle Compensation: %d %s\n", e, cudaGetErrorString(e));
-
-	mexPrintf("Steering Angle Compensation\n");
-
-
 	// Take Spatial IFFT
 	batchedIFFT(d_SIG, nxFFT, ntFFT);
-	cudaMemcpy(SIG, d_SIG, ntFFT * nxFFT * sizeof(cufftComplex), cudaMemcpyDeviceToHost);
-
-	e = cudaGetLastError();
-	if (e) mexPrintf("Error After Spatial IFFT: %d %s\n", e, cudaGetErrorString(e));
-
-	mexPrintf("Spatial IFFT Complete\n");
+	CCE(cudaMemcpy(SIG, d_SIG, ntFFT * nxFFT * sizeof(cufftComplex), cudaMemcpyDeviceToHost));
 
 	// Write final migrated signal to file
 	plhs[0] = mxCreateDoubleMatrix( nx, nt, mxREAL);
@@ -374,16 +350,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]) {
 		}
 	}
 
-
-	//plhs[0] = mxCreateDoubleMatrix( nx, nt, mxREAL);
-
-
-	// Free all allocated memory
-	cudaFree(d_SIG);
-	cudaFree(d_SIG_t);
-	cudaFree(d_SIGforTexture);
-	cudaFree(d_SIGreal);
-	cudaFree(d_SIGimag);
-
+	// Destroy all allocations and reset all state on the current device in the current process.
+	CCE(cudaDeviceReset());
 
 }

@@ -105,13 +105,13 @@ def fkmig(SIG, fs, pitch, TXangle = 0, c = 1540, t0 = 0):
     fkz = v*np.sqrt(Kx**2+4*((f**2)/(c**2))/(beta**2));
     
     #-- Remove evanescent parts
-    SIG[np.abs(f)/np.abs(Kx) < c] = 0;
+    SIG[np.abs(f)/(np.abs(Kx)+np.spacing(1)) < c] = 0;
     
     #-- Linear interpolation in the frequency domain: f -> fkz
-    SIG = interpLIN(fs/ntFFT,SIG,fkz);
+    SIG = interpLIN(fs/ntFFT,SIG.real,fkz) + 1j*interpLIN(fs/ntFFT,SIG.imag,fkz);
     
     #-- Obliquity factor
-    SIG = SIG * f / fkz;
+    SIG = SIG * f / (fkz + np.spacing(1));
     SIG[0] = 0;
     
     #-- Axial IFFT
